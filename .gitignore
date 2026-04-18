@@ -1,5 +1,6 @@
 # Cache and downloads
 tmp/
+!tmp/coverage.svg
 
 # Python
 __pycache__/

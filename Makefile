@@ -19,8 +19,11 @@ test:
 	python -m pytest tests/ -v
 
 testcov:
-	python -m pytest tests/unit/ -v --cov=suba --cov-report=term-missing --cov-report=html:htmlcov
+	@mkdir -p tmp
+	python -m pytest tests/unit/ -v --cov=suba --cov-report=term-missing --cov-report=html:htmlcov --cov-report=xml:tmp/coverage.xml
+	genbadge coverage -i tmp/coverage.xml -o tmp/coverage.svg
 	@echo "Coverage HTML report written to htmlcov/index.html"
+	@echo "Coverage badge written to tmp/coverage.svg"
 
 clean:
 	rm -rf $(BUILDDIR)
