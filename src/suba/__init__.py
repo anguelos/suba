@@ -7,7 +7,7 @@ all chromosomes with fixed inter-chromosomal padding.
 """
 
 from suba.genome import Genome
-from suba.colors import label_colormap
+from suba.util.colors import label_colormap
 from suba.sc_tracks import SCTracks, CountMatrixTracks, max_dense_object_size
 from suba.io import (
     load_count_matrix,
@@ -27,7 +27,8 @@ from suba.sparse_rendering import (
     render_binned_direct,
 )
 
-__version__ = "0.1.0"
+from .version import suba_version
+__version__ = suba_version
 __all__ = [
     "Genome",
     "find_overlapping_gene_indices",

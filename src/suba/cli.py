@@ -1,118 +1,70 @@
 """
 suba.cli
 ~~~~~~~~
-Command-line interface for suba.
+Command-line interface for suba — Hilbert-curve genome visualiser.
 
-Renders the genome as a Hilbert-curve heatmap distinguishing genic regions
-(gene bodies) from intergenic regions.
+Subcommands
+-----------
+
+``genes``
+    Colour each pixel by the rank of the gene whose body it falls in
+    (golden-angle label colourmap; intergenic = background colour).
+
+``chromosomes``
+    Colour each pixel by its chromosome (golden-angle label colourmap).
+
+``density``
+    Colour each pixel by the number of gene bodies that overlap it
+    (continuous colourmap).
+
+``coding``
+    Binary genic / intergenic mask: one colour for positions inside any
+    gene body, another for intergenic regions.
 
 Usage
 -----
 ::
 
-    suba [options]
-    suba --help
+    suba [global options] <subcommand> [subcommand options]
 
-Argument parsing uses :mod:`fargv` with the dataclass style.
+    suba genes --output_file=hilbert.png
+    suba chromosomes --output_file="" --color_bar
+    suba density --colormap=plasma --output_file=density.png
+    suba coding --output_file=""
+
+    # shared flags (before the subcommand)
+    suba --resolution=2048 --dpi=200 genes --output_file=hi_res.png
 """
-
 from __future__ import annotations
-
-import math
-from dataclasses import dataclass
-from pathlib import Path
-
-import numpy as np
 
 import fargv
 
 from suba.genome import Genome, _DEFAULT_GTF_URL
-from suba.sparse_rendering import hilbert_d_to_xy
-from suba.colors import label_colormap
+from suba.util.colors import label_colormap
+from suba.util.hilbert import signal_to_hilbert
+
+import numpy as np
 
 
 # ---------------------------------------------------------------------------
-# CLI parameter dataclass
+# Subcommand definitions
 # ---------------------------------------------------------------------------
 
-@dataclass
-class Config:
-    gtf_url: str = _DEFAULT_GTF_URL
-    "URL or local path to a GTF(.gz) genome annotation file."
-
-    cache_dir: str = "./tmp/cache"
-    "Directory for caching downloaded files."
-
-    padding: int = 1_000_000
-    "Inter-chromosomal padding in bases."
-
-    resolution: int = 1024
-    "Hilbert curve grid side length (must be a power of 2). Image is resolution x resolution pixels."
-
-    colormap: str = "viridis"
-    "Matplotlib colormap name for the Hilbert curve plot."
-
-    output: str = "/tmp/hilbert_genome.png"
-    "Output image file path. Use \'show\' to display interactively."
-
-    dpi: int = 150
-    "Output image DPI."
-
-    color_by: str = "density"
-    "What to color: 'density' (gene overlap count) or 'chromosome' (each chromosome a distinct colour)."
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _is_power_of_two(n: int) -> bool:
-    return n > 0 and (n & (n - 1)) == 0
-
-
-def _next_power_of_two_side(n_values: int) -> int:
-    """Return smallest power-of-2 p such that p*p >= n_values."""
-    p = 1
-    while p * p < n_values:
-        p <<= 1
-    return p
-
-
-def _build_hilbert_image(
-    signal: np.ndarray,
-    resolution: int,
-) -> np.ndarray:
-    """Map a 1D signal onto a resolution x resolution Hilbert curve image.
-
-    The signal is padded with zeros to fill ``resolution ** 2`` pixels.
-    If the signal is longer, it is truncated.
-
-    Parameters
-    ----------
-    signal:
-        1D array of values (float or int).
-    resolution:
-        Side length of the output grid; must be a power of 2.
-
-    Returns
-    -------
-    np.ndarray of float64, shape (resolution, resolution)
-    """
-    n_pixels = resolution * resolution
-
-    # Pad or truncate to exactly n_pixels
-    if len(signal) < n_pixels:
-        signal = np.pad(signal.astype(np.float64), (0, n_pixels - len(signal)))
-    else:
-        signal = signal[:n_pixels].astype(np.float64)
-
-    indices = np.arange(n_pixels, dtype=np.int64)
-    x, y = hilbert_d_to_xy(resolution, indices)
-
-    image = np.zeros((resolution, resolution), dtype=np.float64)
-    image[y, x] = signal
-    return image
-
+_SUBCOMMANDS = {
+    "genes": {
+        # no subcommand-specific parameters
+    },
+    "chromosomes": {
+        # no subcommand-specific parameters
+    },
+    "density": {
+        "colormap": ("viridis", "Matplotlib colormap name for the continuous signal."),
+    },
+    "coding": {
+        "genic_color":      ("#4e9af1", "Colour for positions inside a gene body (any matplotlib colour spec)."),
+        "intergenic_color": ("#111111", "Colour for intergenic positions."),
+    },
+}
 
 # ---------------------------------------------------------------------------
 # Main
@@ -120,96 +72,94 @@ def _build_hilbert_image(
 
 def main() -> None:
     """Entry point for the ``suba`` CLI command."""
-    cfg, _ = fargv.parse(Config)
+    p, _ = fargv.parse(
+        {
+            "gtf_url":    (_DEFAULT_GTF_URL, "URL or local path to a GTF(.gz) annotation file."),
+            "cache_dir":  ("./tmp/cache",    "Directory for caching downloaded files."),
+            "padding":    (1_000_000,        "Inter-chromosomal padding in bases."),
+            "resolution": (1024,             "Hilbert grid side length (power of 2). Output is resolution×resolution pixels."),
+            "dpi":        (150,              "Output image DPI."),
+            "output_file":("",              'Output path (e.g. hilbert.png). Empty string "" shows interactively.'),
+            "color_bar":  (True,             "Attach a colour-bar legend to the figure."),
+            "cmd": _SUBCOMMANDS,
+        },
+        subcommand_return_type="flat",
+    )
 
-    if not _is_power_of_two(cfg.resolution):
-        raise ValueError(
-            f"--resolution must be a power of 2, got {cfg.resolution}."
+    if (p.resolution & (p.resolution - 1)) != 0:
+        raise SystemExit(
+            f"--resolution must be a power of 2, got {p.resolution}."
         )
 
-    print(f"Loading genome from {cfg.gtf_url!r} ...")
+    print(f"Loading genome from {p.gtf_url!r} ...")
     genome = Genome(
-        gtf_url=cfg.gtf_url,
-        cache_dir=cfg.cache_dir,
-        padding=cfg.padding,
+        gtf_url=p.gtf_url,
+        cache_dir=p.cache_dir,
+        padding=p.padding,
     )
     print(repr(genome))
 
-    # Compute step size so that genome[::step] gives ~ resolution^2 bins
-    n_pixels = cfg.resolution * cfg.resolution
-    total = genome.total_length
-    step = max(1, total // n_pixels)
-    print(
-        f"Rendering genome[::{step}] "
-        f"({total:,} bases / {step} bp per pixel) ..."
-    )
-    
-    # ── Render signal ─────────────────────────────────────────────────────
-    if cfg.color_by == "chromosome":
-        raw = genome.chromosome_label_signal(step=step).astype(np.float64)
-        n_chrom = genome.n_chromosomes
-        cmap = label_colormap(n_chrom)
-        vmin, vmax = 0, n_chrom
-        cbar_ticks = list(range(1, n_chrom + 1))
-        cbar_labels = genome._chromosome_name.tolist()
-        title_suffix = "chromosome identity"
-    elif cfg.color_by == "gene":
-        raw = genome.gene_label_signal(step=step).astype(np.float64)
-        n_genes = genome.n_genes
-        cmap = label_colormap(n_genes)
-        vmin, vmax = 0, n_genes
-        cbar_ticks = None
-        cbar_labels = None
-        title_suffix = "gene identity"
+    n_pixels = p.resolution * p.resolution
+    total    = genome.total_length
+    step     = max(1, total // n_pixels)
+    print(f"Rendering [::{step}] ({total:,} bases, {step:,} bp/pixel) ...")
+
+    # ── Build signal, colourmap, and metadata per subcommand ────────────
+    if p.cmd == "genes":
+        raw         = genome.gene_label_signal(step=step)
+        cmap        = label_colormap(genome.n_genes)
+        discrete    = True
+        tick_labels = None          # too many genes to label individually
+        title       = f"Gene identity — {p.resolution}×{p.resolution} @ {step:,} bp/pixel"
+
+    elif p.cmd == "chromosomes":
+        raw         = genome.chromosome_label_signal(step=step)
+        cmap        = label_colormap(genome.n_chromosomes)
+        discrete    = True
+        tick_labels = genome._chromosome_name.tolist()
+        title       = f"Chromosome identity — {p.resolution}×{p.resolution} @ {step:,} bp/pixel"
+
+    elif p.cmd == "density":
+        raw         = genome[::step].astype(np.float64)
+        np.nan_to_num(raw, nan=0.0, copy=False)
+        cmap        = p.colormap
+        discrete    = False
+        tick_labels = None
+        title       = f"Gene overlap density — {p.resolution}×{p.resolution} @ {step:,} bp/pixel"
+
+    elif p.cmd == "coding":
+        import matplotlib.colors as mcolors
+        raw         = (genome[::step] > 0).astype(np.float64)
+        cmap        = mcolors.ListedColormap([p.intergenic_color, p.genic_color])
+        discrete    = False
+        tick_labels = None
+        title       = f"Genic / intergenic — {p.resolution}×{p.resolution} @ {step:,} bp/pixel"
+
     else:
-        raw = genome[::step]
-        raw = np.nan_to_num(raw, nan=0.0)
-        cmap = cfg.colormap
-        vmin, vmax = None, None
-        cbar_ticks = None
-        cbar_labels = None
-        title_suffix = "gene overlap count"
+        raise SystemExit(f"Unknown subcommand: {p.cmd!r}")
 
-    image = _build_hilbert_image(raw, cfg.resolution)
-
-    # ── Plot ──────────────────────────────────────────────────────────────
-    try:
-        import matplotlib.pyplot as plt
-    except ImportError as exc:
-        raise SystemExit(
-            "CLI plotting requires the [cli] extra: "
-            "pip install suba[cli]"
-        ) from exc
-
-    fig, ax = plt.subplots(
-        figsize=(cfg.resolution / cfg.dpi, cfg.resolution / cfg.dpi),
-        dpi=cfg.dpi,
-    )
-    im = ax.imshow(
-        image,
-        cmap=cmap,
-        vmin=vmin,
-        vmax=vmax,
-        interpolation="nearest",
-        aspect="equal",
-    )
-    ax.set_xticks([])
-    ax.set_yticks([])
-    cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-    if cbar_ticks is not None:
-        cbar.set_ticks(cbar_ticks)
-        cbar.set_ticklabels(cbar_labels, fontsize=5)
-    ax.set_title(
-        f"{title_suffix.capitalize()} — Hilbert curve\n"
-        f"{cfg.resolution}x{cfg.resolution} @ {step:,} bp/pixel"
+    # ── Render ──────────────────────────────────────────────────────────
+    image, fig = signal_to_hilbert(
+        raw,
+        colormap    = cmap,
+        discrete    = discrete,
+        legend      = p.color_bar,
+        resolution  = p.resolution,
+        dpi         = p.dpi,
+        title       = title,
+        tick_labels = tick_labels,
     )
 
-    if cfg.output == "show":
+    # ── Output ───────────────────────────────────────────────────────────
+    import matplotlib.pyplot as plt
+
+    if p.output_file == "":
         plt.show()
     else:
-        out_path = Path(cfg.output)
-        fig.savefig(out_path, dpi=cfg.dpi, bbox_inches="tight")
-        print(f"Saved to {out_path}")
+        from pathlib import Path
+        out = Path(p.output_file)
+        fig.savefig(out, dpi=p.dpi, bbox_inches="tight")
+        print(f"Saved to {out}")
 
     plt.close(fig)
 

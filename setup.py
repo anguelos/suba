@@ -1,8 +1,17 @@
 from setuptools import setup, find_packages
 
+import re
+
+def _read_version():
+    with open('src/suba/version.py') as f:
+        m = re.search(r'suba_version\s*=\s*["\']([^"\']+)["\']', f.read())
+    if not m:
+        raise RuntimeError('Cannot find suba_version in src/suba/version.py')
+    return m.group(1)
+
 setup(
     name="suba",
-    version="0.1.0",
+    version=_read_version(),
     description=(
         "Single cell Unidimensional Base Annotation — "
         "genomic data as 1D numpy-like objects"
@@ -12,7 +21,7 @@ setup(
     author="Anguelos Nicolaou",
     author_email="anguelos.nicolaou@gmail.com",
     url="https://github.com/anguelos/suba",
-    license="MIT",
+    license="AGPL-3.0-or-later",
     python_requires=">=3.9",
     package_dir={"": "src"},
     packages=find_packages(where="src"),
@@ -37,7 +46,7 @@ setup(
     },
     entry_points={
         "console_scripts": [
-            "suba=suba.cli:main",
+            "suba_hilbert_demo=suba.cli:main",
         ],
     },
     classifiers=[

@@ -4,7 +4,8 @@ sys.path.insert(0, os.path.abspath("../src"))
 
 project = "suba"
 author = "Anguelos Nicolaou"
-release = "0.1.0"
+from suba.version import suba_version
+release = suba_version
 
 extensions = [
     "myst_parser",
